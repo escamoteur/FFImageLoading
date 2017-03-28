@@ -28,22 +28,40 @@ namespace FFImageLoading.Svg.Platform
 		private readonly Dictionary<string, XElement> defs = new Dictionary<string, XElement>();
 
 		public SKSvg()
-			: this(DefaultPPI)
+			: this(DefaultPPI, SKSize.Empty)
 		{
 		}
 
 		public SKSvg(float pixelsPerInch)
+			: this(pixelsPerInch, SKSize.Empty)
 		{
+		}
+
+		public SKSvg(SKSize canvasSize)
+			: this(DefaultPPI, canvasSize)
+		{
+		}
+
+		public SKSvg(float pixelsPerInch, SKSize canvasSize)
+		{
+			CanvasSize = canvasSize;
 			PixelsPerInch = pixelsPerInch;
 			ThrowOnUnsupportedElement = DefaultThrowOnUnsupportedElement;
 		}
 
 		public float PixelsPerInch { get; set; }
 		public bool ThrowOnUnsupportedElement { get; set; }
+		public SKRect ViewBox { get; private set; }
+		public SKSize CanvasSize { get; private set; }
 		public SKPicture Picture { get; private set; }
 		public string Description { get; private set; }
 		public string Title { get; private set; }
 		public string Version { get; private set; }
+
+		public SKPicture Load(string filename)
+		{
+			return Load(XDocument.Load(filename));
+		}
 
 		public SKPicture Load(Stream stream)
 		{
@@ -67,33 +85,77 @@ namespace FFImageLoading.Svg.Platform
 			Title = svg.Element(ns + "title")?.Value;
 			Description = svg.Element(ns + "desc")?.Value ?? svg.Element(ns + "description")?.Value;
 
-			// get the dimensions
-			var widthA = svg.Attribute("width");
-			var heightA = svg.Attribute("height");
-			var width = ReadNumber(widthA);
-			var height = ReadNumber(heightA);
-			var size = new SKSize(width, height);
+			// TODO: parse the "preserveAspectRatio" values properly
+			var preserveAspectRatio = svg.Attribute("preserveAspectRatio")?.Value;
 
-			var viewBox = SKRect.Create(size);
+			// get the SVG dimensions
 			var viewBoxA = svg.Attribute("viewBox") ?? svg.Attribute("viewPort");
 			if (viewBoxA != null)
 			{
-				viewBox = ReadRectangle(viewBoxA.Value);
+				ViewBox = ReadRectangle(viewBoxA.Value);
 			}
 
-			if (widthA != null && widthA.Value.Contains("%"))
+			if (CanvasSize.IsEmpty)
 			{
-				size.Width *= viewBox.Width;
-			}
-			if (heightA != null && heightA.Value.Contains("%"))
-			{
-				size.Height *= viewBox.Height;
+				// get the user dimensions
+				var widthA = svg.Attribute("width");
+				var heightA = svg.Attribute("height");
+				var width = ReadNumber(widthA);
+				var height = ReadNumber(heightA);
+				var size = new SKSize(width, height);
+
+				if (widthA == null)
+				{
+					size.Width = ViewBox.Width;
+				}
+				else if (widthA.Value.Contains("%"))
+				{
+					size.Width *= ViewBox.Width;
+				}
+				if (heightA == null)
+				{
+					size.Height = ViewBox.Height;
+				}
+				else if (heightA != null && heightA.Value.Contains("%"))
+				{
+					size.Height *= ViewBox.Height;
+				}
+
+				// set the property
+				CanvasSize = size;
 			}
 
-			// craete the picture from the elements
+			// create the picture from the elements
 			using (var recorder = new SKPictureRecorder())
-			using (var canvas = recorder.BeginRecording(SKRect.Create(size)))
+			using (var canvas = recorder.BeginRecording(SKRect.Create(CanvasSize)))
 			{
+				// if there is no viewbox, then we don't do anything, otherwise
+				// scale the SVG dimensions to fit inside the user dimensions
+				if (!ViewBox.IsEmpty && (ViewBox.Width != CanvasSize.Width || ViewBox.Height != CanvasSize.Height))
+				{
+					if (preserveAspectRatio == "none")
+					{
+						canvas.Scale(CanvasSize.Width / ViewBox.Width, CanvasSize.Height / ViewBox.Height);
+					}
+					else
+					{
+						// TODO: just center scale for now
+						var scale = Math.Min(CanvasSize.Width / ViewBox.Width, CanvasSize.Height / ViewBox.Height);
+						var centered = SKRect.Create(CanvasSize).AspectFit(ViewBox.Size);
+						canvas.Translate(centered.Left, centered.Top);
+						canvas.Scale(scale, scale);
+					}
+				}
+
+				// translate the canvas by the viewBox origin
+				canvas.Translate(-ViewBox.Left, -ViewBox.Top);
+
+				// if the viewbox was specified, then crop to that
+				if (!ViewBox.IsEmpty)
+				{
+					canvas.ClipRect(ViewBox);
+				}
+
 				LoadElements(svg.Elements(), canvas);
 
 				Picture = recorder.EndRecording();
@@ -117,15 +179,19 @@ namespace FFImageLoading.Svg.Platform
 
 		private void ReadElement(XElement e, SKCanvas canvas, SKPaint stroke, SKPaint fill)
 		{
-			ReadPaints(e, ref stroke, ref fill);
-
 			// transform matrix
 			var transform = ReadTransform(e.Attribute("transform")?.Value ?? string.Empty);
 			canvas.Save();
 			canvas.Concat(ref transform);
 
-			// SVG elements
+			// SVG element
 			var elementName = e.Name.LocalName;
+			var isGroup = elementName == "g";
+
+			// read style
+			var style = ReadPaints(e, ref stroke, ref fill, isGroup);
+
+			// parse elements
 			switch (elementName)
 			{
 				case "text":
@@ -218,10 +284,25 @@ namespace FFImageLoading.Svg.Platform
 				case "g":
 					if (e.HasElements)
 					{
+						// get current group opacity
+						float groupOpacity = ReadOpacity(style);
+						if (groupOpacity != 1.0f)
+						{
+							var opacity = (byte)(255 * groupOpacity);
+							var opacityPaint = new SKPaint { Color = SKColors.Black.WithAlpha(opacity) };
+
+							// apply the opacity
+							canvas.SaveLayer(opacityPaint);
+						}
+
 						foreach (var gElement in e.Elements())
 						{
 							ReadElement(gElement, canvas, stroke?.Clone(), fill?.Clone());
 						}
+
+						// restore state
+						if (groupOpacity != 1.0f)
+							canvas.Restore();
 					}
 					break;
 				case "use":
@@ -534,13 +615,18 @@ namespace FFImageLoading.Svg.Platform
 			return dic;
 		}
 
-		private void ReadPaints(XElement e, ref SKPaint stroke, ref SKPaint fill)
+		private Dictionary<string, string> ReadPaints(XElement e, ref SKPaint stroke, ref SKPaint fill, bool isGroup)
 		{
-			ReadPaints(ReadStyle(e), ref stroke, ref fill);
+			var style = ReadStyle(e);
+			ReadPaints(style, ref stroke, ref fill, isGroup);
+			return style;
 		}
 
-		private void ReadPaints(Dictionary<string, string> style, ref SKPaint strokePaint, ref SKPaint fillPaint)
+		private void ReadPaints(Dictionary<string, string> style, ref SKPaint strokePaint, ref SKPaint fillPaint, bool isGroup)
 		{
+			// get current element opacity, but ignore for groups (special case)
+			float elementOpacity = isGroup ? 1.0f : ReadOpacity(style);
+
 			// stroke
 			var stroke = GetString(style, "stroke").Trim();
 			if (stroke.Equals("none", StringComparison.OrdinalIgnoreCase))
@@ -584,6 +670,11 @@ namespace FFImageLoading.Svg.Platform
 					if (strokePaint == null)
 						strokePaint = CreatePaint(true);
 					strokePaint.Color = strokePaint.Color.WithAlpha((byte)(ReadNumber(strokeOpacity) * 255));
+				}
+
+				if (strokePaint != null)
+				{
+					strokePaint.Color = strokePaint.Color.WithAlpha((byte)(strokePaint.Color.Alpha * elementOpacity));
 				}
 			}
 
@@ -655,6 +746,11 @@ namespace FFImageLoading.Svg.Platform
 						fillPaint = CreatePaint();
 
 					fillPaint.Color = fillPaint.Color.WithAlpha((byte)(ReadNumber(fillOpacity) * 255));
+				}
+
+				if (fillPaint != null)
+				{
+					fillPaint.Color = fillPaint.Color.WithAlpha((byte)(fillPaint.Color.Alpha * elementOpacity));
 				}
 			}
 		}
@@ -803,8 +899,6 @@ namespace FFImageLoading.Svg.Platform
 			}
 		}
 
-		private readonly Dictionary<string, SKPaint> linearGradients = new Dictionary<string, SKPaint>();
-
 		private SKShader ReadGradient(XElement defE)
 		{
 			switch (defE.Name.LocalName)
@@ -934,6 +1028,22 @@ namespace FFImageLoading.Svg.Platform
 			}
 
 			return stops;
+		}
+
+		private float ReadOpacity(Dictionary<string, string> style)
+		{
+			return Math.Min(Math.Max(0.0f, ReadNumber(style, "opacity", 1.0f)), 1.0f);
+		}
+
+		private float ReadNumber(Dictionary<string, string> style, string key, float defaultValue)
+		{
+			float value = defaultValue;
+			string strValue;
+			if (style.TryGetValue(key, out strValue))
+			{
+				value = ReadNumber(strValue);
+			}
+			return value;
 		}
 
 		private float ReadNumber(string raw)

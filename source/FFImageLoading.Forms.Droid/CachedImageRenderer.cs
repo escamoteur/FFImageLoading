@@ -3,7 +3,6 @@ using System;
 using System.ComponentModel;
 using Xamarin.Forms;
 using Xamarin.Forms.Platform.Android;
-using FFImageLoading;
 using FFImageLoading.Work;
 using FFImageLoading.Forms.Droid;
 using FFImageLoading.Forms;
@@ -12,10 +11,9 @@ using Android.Graphics.Drawables;
 using Android.Graphics;
 using System.IO;
 using System.Threading.Tasks;
-using FFImageLoading.Extensions;
 using FFImageLoading.Forms.Args;
-using System.Threading;
 using FFImageLoading.Helpers;
+using FFImageLoading.Views;
 
 [assembly: ExportRenderer(typeof(CachedImage), typeof(CachedImageRenderer))]
 namespace FFImageLoading.Forms.Droid
@@ -44,6 +42,7 @@ namespace FFImageLoading.Forms.Droid
 
 		public CachedImageRenderer(IntPtr javaReference, JniHandleOwnership transfer) : this()
 		{
+			AutoPackage = false;
 		}
 
 		protected override void Dispose(bool disposing)
@@ -61,7 +60,7 @@ namespace FFImageLoading.Forms.Droid
 
 			if (e.OldElement == null)
 			{
-				CachedImageView nativeControl = new CachedImageView(Context);
+				var nativeControl = new CachedImageView(Context);
 				SetNativeControl(nativeControl);
 			} 
 
@@ -123,7 +122,7 @@ namespace FFImageLoading.Forms.Droid
 				Control.SetImageResource(global::Android.Resource.Color.Transparent);
 			}
 
-			((IElementController)Element).SetValueFromRenderer(CachedImage.IsLoadingPropertyKey, true);
+			Element.SetIsLoading(true);
 
 			if (Element != null && object.Equals(Element.Source, source) && !_isDisposed)
 			{
@@ -132,7 +131,7 @@ namespace FFImageLoading.Forms.Droid
 
 				if (ffSource == null)
 				{
-					if (imageView != null)
+					//if (imageView != null)
 						imageView.SetImageResource(global::Android.Resource.Color.Transparent);
 
 					ImageLoadingFinished(Element);
@@ -304,6 +303,12 @@ namespace FFImageLoading.Forms.Droid
 					imageLoader.DownloadStarted((downloadInformation) =>
 						element.OnDownloadStarted(new CachedImageEvents.DownloadStartedEventArgs(downloadInformation)));
 
+					imageLoader.DownloadProgress((progress) =>
+						element.OnDownloadProgress(new CachedImageEvents.DownloadProgressEventArgs(progress)));
+
+					imageLoader.FileWriteFinished((fileWriteInfo) =>
+						element.OnFileWriteFinished(new CachedImageEvents.FileWriteFinishedEventArgs(fileWriteInfo)));
+
 					_currentTask = imageLoader.Into(imageView);
 				}
 			}
@@ -315,7 +320,7 @@ namespace FFImageLoading.Forms.Droid
 			{
 				if (element != null && !_isDisposed)
 				{
-					((IElementController)element).SetValueFromRenderer(CachedImage.IsLoadingPropertyKey, false);
+					Element.SetIsLoading(false);
 					((IVisualElementController)element).NativeSizeChanged();
 				}
 			});
@@ -326,11 +331,12 @@ namespace FFImageLoading.Forms.Droid
 			UpdateBitmap(null);
 		}
 
-		private void Cancel()
+		private async void Cancel()
 		{
-			if (_currentTask != null && !_currentTask.IsCancelled) 
+			var taskToCancel = _currentTask;
+			if (taskToCancel != null && !taskToCancel.IsCancelled)
 			{
-				_currentTask.Cancel();
+				await Task.Run(() => taskToCancel?.Cancel());
 			}
 		}
 

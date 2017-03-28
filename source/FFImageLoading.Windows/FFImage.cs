@@ -89,7 +89,7 @@ namespace FFImageLoading
 
             TaskParameter imageLoader = null;
 
-            var ffSource = await FFImageSourceBinding.GetImageSourceBinding(Source);
+            var ffSource = await FFImageSourceBinding.GetImageSourceBinding(Source).ConfigureAwait(false);
 
             if (ffSource == null)
             {
@@ -384,7 +384,7 @@ namespace FFImageLoading
         /// <summary>
         /// The cache duration property.
         /// </summary>
-        public static readonly DependencyProperty CacheDurationProperty = DependencyProperty.Register(nameof(CacheDuration), typeof(int), typeof(FFImage), new PropertyMetadata(30));
+        public static readonly DependencyProperty CacheDurationProperty = DependencyProperty.Register(nameof(CacheDuration), typeof(int), typeof(FFImage), new PropertyMetadata(ImageService.Instance.Config.DiskCacheDuration.Days));
 
         /// <summary>
         /// How long the file will be cached on disk.

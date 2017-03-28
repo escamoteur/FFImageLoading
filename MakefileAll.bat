@@ -1,5 +1,3 @@
-@echo off
-
 set msbuild="C:\Program Files (x86)\MSBuild\14.0\bin\msbuild.exe"
 set config=Windows Release
 set platform=AnyCPU
@@ -8,6 +6,7 @@ if "%CI%"=="True" (
     set logger=/l:"C:\Program Files\AppVeyor\BuildAgent\Appveyor.MSBuildLogger.dll"
 )
 set buildargs=/p:Configuration="%config%" /p:Platform="%platform%" /p:NoWarn="%warnings%" /v:minimal %logger%
+set buildargsTests=/p:Configuration="Debug" /p:Platform="%platform%" /p:NoWarn="%warnings%" /v:minimal %logger%
 
 echo Restoring NuGets...
 
@@ -40,9 +39,16 @@ echo Building FFImageLoading.Svg...
 %msbuild% source/FFImageLoading.Svg/FFImageLoading.Svg.csproj %buildargs%
 %msbuild% source/FFImageLoading.Svg.Touch/FFImageLoading.Svg.Touch.csproj %buildargs%
 %msbuild% source/FFImageLoading.Svg.Droid/FFImageLoading.Svg.Droid.csproj %buildargs%
+%msbuild% source/FFImageLoading.Svg.Windows/FFImageLoading.Svg.Windows.csproj %buildargs%
 %msbuild% source/FFImageLoading.Svg.Forms/FFImageLoading.Svg.Forms.csproj %buildargs%
 %msbuild% source/FFImageLoading.Svg.Forms.Touch/FFImageLoading.Svg.Forms.Touch.csproj %buildargs%
 %msbuild% source/FFImageLoading.Svg.Forms.Droid/FFImageLoading.Svg.Forms.Droid.csproj %buildargs%
+%msbuild% source/FFImageLoading.Svg.Forms.Windows/FFImageLoading.Svg.Forms.Windows.csproj %buildargs%
+
+echo Unit testing...
+
+%msbuild% source/Tests/FFImageLoading.Core.Tests/FFImageLoading.Core.Tests.csproj %buildargsTests%
+xunit.console.clr4 source/Tests/FFImageLoading.Core.Tests/bin/Debug/FFImageLoading.Core.Tests.dll /appveyor
 
 echo Generating symbols with Gitlink...
 

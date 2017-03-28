@@ -59,6 +59,7 @@ namespace FFImageLoading.Forms.WinRT
     public class CachedImageRenderer : ViewRenderer<CachedImage, Image>
 #endif
     {
+        private bool _measured;
         private IScheduledWork _currentTask;
 		private bool _isDisposed = false;
 
@@ -69,8 +70,6 @@ namespace FFImageLoading.Forms.WinRT
         {
         }
 
-        private bool measured;
-
         public override Xamarin.Forms.SizeRequest GetDesiredSize(double widthConstraint, double heightConstraint)
         {
             var bitmapSource = Control.Source as BitmapSource;
@@ -78,7 +77,7 @@ namespace FFImageLoading.Forms.WinRT
             if (bitmapSource == null)
                 return new Xamarin.Forms.SizeRequest();
 
-            measured = true;
+            _measured = true;
 
             return new Xamarin.Forms.SizeRequest(new Xamarin.Forms.Size()
             {
@@ -171,41 +170,15 @@ namespace FFImageLoading.Forms.WinRT
 
         private void OnImageOpened(object sender, RoutedEventArgs routedEventArgs)
         {
-            if (measured)
+            if (_measured)
             {
-                HackInvalidateMeasure(Element);
+                ((Xamarin.Forms.IVisualElementController)Element)?.InvalidateMeasure(Xamarin.Forms.Internals.InvalidationTrigger.RendererReady);
             }
-        }
-
-        void HackInvalidateMeasure(object elCtrl)
-        {
-            var obj = elCtrl;
-#if !SILVERLIGHT
-            // HACK FOR https://bugzilla.xamarin.com/show_bug.cgi?id=41087
-
-            var ti = obj.GetType().GetTypeInfo();
-            var found = obj.GetType().GetRuntimeMethods()
-                .FirstOrDefault(v => v.Name.EndsWith("InvalidateMeasure") && v.GetParameters().Count() == 1);
-            
-            if (found != null)
-            {
-                var paramType = found.GetParameters().First().ParameterType;
-                var enumValues = Enum.GetValues(paramType);
-                found.Invoke(obj, new[] { enumValues.GetValue(5) });
-            }
-            else
-            {
-                ((Xamarin.Forms.IVisualElementController)obj).NativeSizeChanged();
-            }
-            // END OF HACK
-#else
-            ((Xamarin.Forms.IVisualElementController)obj).NativeSizeChanged();
-#endif
         }
 
         private async void UpdateSource()
         {
-            ((Xamarin.Forms.IElementController)Element).SetValueFromRenderer(CachedImage.IsLoadingPropertyKey, true);
+            Element.SetIsLoading(true);
 
             Xamarin.Forms.ImageSource source = Element.Source;
 
@@ -382,6 +355,12 @@ namespace FFImageLoading.Forms.WinRT
 				imageLoader.DownloadStarted((downloadInformation) =>
 					element.OnDownloadStarted(new CachedImageEvents.DownloadStartedEventArgs(downloadInformation)));
 
+				imageLoader.DownloadProgress((progress) =>
+					element.OnDownloadProgress(new CachedImageEvents.DownloadProgressEventArgs(progress)));
+
+				imageLoader.FileWriteFinished((fileWriteInfo) =>
+					element.OnFileWriteFinished(new CachedImageEvents.FileWriteFinishedEventArgs(fileWriteInfo)));
+
                 _currentTask = imageLoader.Into(Control);
             }
         }
@@ -411,13 +390,14 @@ namespace FFImageLoading.Forms.WinRT
             	if (element != null && !_isDisposed)
 				{
 					var elCtrl = element as Xamarin.Forms.IVisualElementController;
+
 					if (elCtrl != null)
 					{
-						elCtrl.SetValueFromRenderer(CachedImage.IsLoadingPropertyKey, false);
-						//elCtrl.NativeSizeChanged();
-						HackInvalidateMeasure(element);
-					}
-				}
+                        ((Xamarin.Forms.IVisualElementController)Element)?.InvalidateMeasure(Xamarin.Forms.Internals.InvalidationTrigger.RendererReady);
+                    }
+
+                    element.SetIsLoading(false);
+                }
 			});
         }
 
@@ -426,13 +406,14 @@ namespace FFImageLoading.Forms.WinRT
 			UpdateSource();
 		}
 
-        private void Cancel()
-        {
-            if (_currentTask != null && !_currentTask.IsCancelled)
-            {
-                _currentTask.Cancel();
-            }
-        }
+		private void Cancel()
+		{
+			var taskToCancel = _currentTask;
+			if (taskToCancel != null && !taskToCancel.IsCancelled)
+			{
+				taskToCancel.Cancel();
+			}
+		}
 
 		private Task<byte[]> GetImageAsJpgAsync(GetImageAsJpgArgs args)
         {

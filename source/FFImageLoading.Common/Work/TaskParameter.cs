@@ -83,6 +83,10 @@ namespace FFImageLoading.Work
 
 		public Func<CancellationToken, Task<Stream>> Stream { get; private set; }
 
+        internal Stream StreamRead { get; set; }
+
+        internal string StreamChecksum { get; set; }
+
 		public TimeSpan? CacheDuration { get; private set; }
 
 		public Tuple<int, int> DownSampleSize { get; private set; }
@@ -110,6 +114,10 @@ namespace FFImageLoading.Work
 		public Action<IScheduledWork> OnFinish { get; private set; }
 
         public Action<DownloadInformation> OnDownloadStarted { get; private set; }
+
+        public Action<FileWriteInfo> OnFileWriteFinished { get; private set; }
+
+        public Action<DownloadProgress> OnDownloadProgress { get; private set; }
 
 		public List<ITransformation> Transformations { get; private set; }
 
@@ -430,6 +438,34 @@ namespace FFImageLoading.Work
             return this;
         }
 
+        /// <summary>
+        /// This callback can be used for reading download progress
+        /// </summary>
+        /// <returns>The progress.</returns>
+        /// <param name="action">Action.</param>
+        public TaskParameter DownloadProgress(Action<DownloadProgress> action)
+        {
+            if (action == null)
+                throw new Exception("Given lambda should not be null.");
+
+            OnDownloadProgress = action;
+            return this;
+        }
+
+        /// <summary>
+        /// Called after file is succesfully written to the disk
+        /// </summary>
+        /// <returns>The write ended.</returns>
+        /// <param name="action">Action.</param>
+        public TaskParameter FileWriteFinished(Action<FileWriteInfo> action)
+        {
+            if (action == null)
+                throw new Exception("Given lambda should not be null.");
+
+            OnFileWriteFinished = action;
+            return this;
+        }
+
         public void Dispose()
         {
             if (!_disposed)
@@ -438,6 +474,8 @@ namespace FFImageLoading.Work
                 OnError = null;
                 OnFinish = null;
                 OnDownloadStarted = null;
+                OnDownloadProgress = null;
+                OnFileWriteFinished = null;
                 Transformations = null;
                 Stream = null;
 

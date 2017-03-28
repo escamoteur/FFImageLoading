@@ -9,6 +9,7 @@ using Android.Graphics.Drawables;
 using System.Collections.Generic;
 using FFImageLoading.Drawables;
 using FFImageLoading.Targets;
+using System.IO;
 
 namespace FFImageLoading
 {
@@ -216,6 +217,34 @@ namespace FFImageLoading
         }
 
         /// <summary>
+        /// Loads the image into PNG Stream
+        /// </summary>
+        /// <returns>The PNGS tream async.</returns>
+        /// <param name="parameters">Parameters.</param>
+        public static async Task<Stream> AsPNGStreamAsync(this TaskParameter parameters)
+        {
+            var result = await AsBitmapDrawableAsync(parameters);
+            var stream = new MemoryStream();
+            await result.Bitmap.CompressAsync(Android.Graphics.Bitmap.CompressFormat.Png, 90, stream);
+            stream.Position = 0;
+            return stream;
+        }
+
+        /// <summary>
+        /// Loads the image into JPG Stream
+        /// </summary>
+        /// <returns>The JPG Stream async.</returns>
+        /// <param name="parameters">Parameters.</param>
+        public async static Task<Stream> AsJPGStreamAsync(this TaskParameter parameters, int quality = 80)
+        {
+            var result = await AsBitmapDrawableAsync(parameters);
+            var stream = new MemoryStream();
+            await result.Bitmap.CompressAsync(Android.Graphics.Bitmap.CompressFormat.Jpeg, quality, stream);
+            stream.Position = 0;
+            return stream;
+        }
+
+        /// <summary>
         /// Downloads the image request into disk cache for future use if not already exists.
         /// Only Url Source supported.
         /// IMPORTANT: It throws image loading exceptions - you should handle them
@@ -225,7 +254,7 @@ namespace FFImageLoading
         {
             if (parameters.Source == ImageSource.Url)
             {
-                await PreloadAsync(parameters.WithCache(CacheType.Disk));
+                await PreloadAsync(parameters.WithCache(CacheType.Disk)).ConfigureAwait(false);
             }
         }
 

@@ -2,8 +2,8 @@
 using FFImageLoading.Concurrency;
 using System.Windows.Media.Imaging;
 #else
-using System.Collections.Concurrent;
 using Windows.UI.Xaml.Media.Imaging;
+using Windows.Security.ExchangeActiveSyncProvisioning;
 #endif
 
 using System;
@@ -16,13 +16,26 @@ namespace FFImageLoading.Cache
     class ImageCache : IImageCache
     {
         private static IImageCache _instance;
-        private readonly ConcurrentDictionary<string, Tuple<WeakReference<WriteableBitmap>, ImageInformation>> _reusableBitmaps;
+        private readonly WriteableBitmapLRUCache _reusableBitmaps;
 		private readonly IMiniLogger _logger;
 
         private ImageCache(int maxCacheSize, IMiniLogger logger)
         {
-			_logger = logger;
-            _reusableBitmaps = new ConcurrentDictionary<string, Tuple<WeakReference<WriteableBitmap>, ImageInformation>>();
+            _logger = logger;
+
+            if (maxCacheSize == 0)
+            {
+                //TODO Does anyone know how we could get available app ram from WinRT API?
+                EasClientDeviceInformation deviceInfo = new EasClientDeviceInformation();
+                if (deviceInfo.OperatingSystem.ToLower().Contains("phone"))
+                    maxCacheSize = 1000000 * 32; //32MB
+                else
+                    maxCacheSize = 1000000 * 128; //128MB
+
+                _logger?.Debug($"Memory cache size: {maxCacheSize} bytes");
+            }
+
+            _reusableBitmaps = new WriteableBitmapLRUCache(maxCacheSize);
         }
 
         public static IImageCache Instance
@@ -38,13 +51,12 @@ namespace FFImageLoading.Cache
             if (string.IsNullOrWhiteSpace(key) || bitmap == null)
                 return;
 
-            var weakRef = new WeakReference<WriteableBitmap>(bitmap);
-            _reusableBitmaps.TryAdd(key, new Tuple<WeakReference<WriteableBitmap>, ImageInformation>(weakRef, imageInformation));
+            _reusableBitmaps.TryAdd(key, new Tuple<WriteableBitmap, ImageInformation>(bitmap, imageInformation));
         }
 
 		public ImageInformation GetInfo(string key)
 		{
-			Tuple<WeakReference<WriteableBitmap>, ImageInformation> cacheEntry;
+			Tuple<WriteableBitmap, ImageInformation> cacheEntry;
 			if (_reusableBitmaps.TryGetValue (key, out cacheEntry))
 			{
 				return cacheEntry.Item2;
@@ -55,33 +67,17 @@ namespace FFImageLoading.Cache
 
         public Tuple<WriteableBitmap, ImageInformation> Get(string key)
         {
-            CleanAbandonedItems();
-
             if (string.IsNullOrWhiteSpace(key))
                 return null;
 
-            Tuple<WeakReference<WriteableBitmap>, ImageInformation> cacheEntry;
-            WriteableBitmap bitmap = null;
+            Tuple<WriteableBitmap, ImageInformation> cacheEntry;
 
-            if (_reusableBitmaps.TryGetValue(key, out cacheEntry) && cacheEntry.Item1.TryGetTarget(out bitmap))
+            if (_reusableBitmaps.TryGetValue(key, out cacheEntry) && cacheEntry.Item1 != null)
             {
-                return new Tuple<WriteableBitmap, ImageInformation>(bitmap, cacheEntry.Item2);
+                return new Tuple<WriteableBitmap, ImageInformation>(cacheEntry.Item1, cacheEntry.Item2);
             }
 
             return null;
-        }
-
-        void CleanAbandonedItems()
-        {
-            foreach (var item in _reusableBitmaps)
-            {
-                WriteableBitmap bitmap = null;
-                if (!item.Value.Item1.TryGetTarget(out bitmap) || bitmap == null)
-                {
-                    Tuple<WeakReference<WriteableBitmap>, ImageInformation> removed;
-                    _reusableBitmaps.TryRemove(item.Key, out removed);
-                }      
-            }
         }
 
         public void Clear()
@@ -101,8 +97,7 @@ namespace FFImageLoading.Cache
                 return;
             
 			_logger.Debug (string.Format ("Called remove from memory cache for '{0}'", key));
-			Tuple<WeakReference<WriteableBitmap>, ImageInformation> removed;
-            _reusableBitmaps.TryRemove(key, out removed);
+            _reusableBitmaps.Remove(key);
         }
 
 		public void RemoveSimilar(string baseKey)
@@ -110,12 +105,13 @@ namespace FFImageLoading.Cache
             if (string.IsNullOrWhiteSpace(baseKey))
                 return;
             
-            var keysToRemove = _reusableBitmaps.Where(v => v.Value?.Item2?.BaseKey == baseKey).Select(v => v.Value?.Item2?.CacheKey).ToList();
+            var pattern = baseKey + ";";
 
-			foreach (var key in keysToRemove)
-			{
-				Remove(key);
-			}
+            var keysToRemove = _reusableBitmaps.Keys.Where(i => i.StartsWith(pattern, StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var key in keysToRemove)
+            {
+                Remove(key);
+            }
 		}
     }
 }

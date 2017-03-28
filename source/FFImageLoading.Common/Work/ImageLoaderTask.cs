@@ -11,13 +11,7 @@ namespace FFImageLoading.Work
 {
     public abstract class ImageLoaderTask<TImageContainer, TImageView> : IImageLoaderTask where TImageContainer : class where TImageView : class
     {
-        bool isLoadingPlaceholderLoaded;
-        static int _streamIndex;
-        static int GetNextStreamIndex()
-        {
-            return Interlocked.Increment(ref _streamIndex);
-        }
-
+        bool _isLoadingPlaceholderLoaded;
         readonly bool _clearCacheOnOutOfMemory;
 
         public ImageLoaderTask(IMemoryCache<TImageContainer> memoryCache, IDataResolverFactory dataResolverFactory, ITarget<TImageContainer, TImageView> target, TaskParameter parameters, IImageService imageService, Configuration configuration, IMainThreadDispatcher mainThreadDispatcher, bool clearCacheOnOutOfMemory)
@@ -33,12 +27,51 @@ namespace FFImageLoading.Work
             CancellationTokenSource = new CancellationTokenSource();
             ImageInformation = new ImageInformation();
             CanUseMemoryCache = true;
+            SetKeys();
+            Target?.SetImageLoadingTask(this);
+        }
 
+        public async Task Init()
+        {
+            if (Parameters.Source == ImageSource.Stream && Configuration.StreamChecksumsAsKeys && string.IsNullOrWhiteSpace(Parameters.CustomCacheKey))
+            {
+                await Task.Run(async () =>
+                {
+                    try
+                    {
+                        Parameters.StreamRead = await (Parameters.Stream?.Invoke(CancellationTokenSource.Token)).ConfigureAwait(false);
+                    }
+                    catch(TaskCanceledException ex)
+                    {
+                        Parameters.StreamRead = null;
+                        Logger.Error(ex.Message, ex);
+                    }
+
+                    if (Parameters.StreamRead != null && Parameters.StreamRead.CanSeek)
+                    {
+                        Parameters.StreamChecksum = Configuration.MD5Helper.MD5(Parameters.StreamRead);
+                        Parameters.StreamRead.Position = 0;
+                        SetKeys();
+                    }
+                }).ConfigureAwait(false);
+            }
+        }
+
+        void SetKeys()
+        {
             KeyRaw = Parameters.Path;
             if (Parameters.Source == ImageSource.Stream)
             {
-                CanUseMemoryCache = false;
-                KeyRaw = string.Concat("Stream_", GetNextStreamIndex());
+                if (!string.IsNullOrWhiteSpace(Parameters.StreamChecksum))
+                {
+                    CanUseMemoryCache = true;
+                    KeyRaw = Parameters.StreamChecksum;
+                }
+                else
+                {
+                    CanUseMemoryCache = false;
+                    KeyRaw = string.Concat("Stream_", Guid.NewGuid().ToString("N"));
+                }
             }
 
             if (!string.IsNullOrWhiteSpace(Parameters.CustomCacheKey))
@@ -109,8 +142,6 @@ namespace FFImageLoading.Work
 
             ImageInformation.SetKey(Key, Parameters.CustomCacheKey);
             ImageInformation.SetPath(Parameters.Path);
-
-            Target?.SetImageLoadingTask(this);
         }
 
         public Configuration Configuration { get; private set; }
@@ -246,9 +277,8 @@ namespace FFImageLoading.Work
                 if (Parameters.Preload && Parameters.CacheType.HasValue && Parameters.CacheType.Value == CacheType.Disk)
                     return false;
                 
-                bool isFadeAnimationEnabled = Parameters.FadeAnimationEnabled.HasValue ? Parameters.FadeAnimationEnabled.Value : Configuration.FadeAnimationEnabled;
                 bool isFadeAnimationEnabledForCached = Parameters.FadeAnimationForCachedImagesEnabled.HasValue ? Parameters.FadeAnimationForCachedImagesEnabled.Value : Configuration.FadeAnimationForCachedImages;
-                var result = await TryLoadFromMemoryCacheAsync(Key, true, isFadeAnimationEnabled && isFadeAnimationEnabledForCached, false).ConfigureAwait(false);
+                var result = await TryLoadFromMemoryCacheAsync(Key, true, isFadeAnimationEnabledForCached, false).ConfigureAwait(false);
 
                 if (result)
                 {
@@ -261,7 +291,7 @@ namespace FFImageLoading.Work
                         {
                             Parameters?.OnSuccess?.Invoke(ImageInformation, LoadingResult.MemoryCache);
                             Parameters?.OnFinish?.Invoke(this);
-                        });
+                        }).ConfigureAwait(false);
                     }
                     else
                     {
@@ -273,12 +303,10 @@ namespace FFImageLoading.Work
                 {
                     ThrowIfCancellationRequested();
                     // Loading placeholder if enabled
-                    if (!isLoadingPlaceholderLoaded && !string.IsNullOrWhiteSpace(Parameters.LoadingPlaceholderPath))
+                    if (!_isLoadingPlaceholderLoaded && !string.IsNullOrWhiteSpace(Parameters.LoadingPlaceholderPath))
                     {
                         await ShowPlaceholder(Parameters.LoadingPlaceholderPath, KeyForLoadingPlaceholder,
                                               Parameters.LoadingPlaceholderSource, true).ConfigureAwait(false);
-
-                        isLoadingPlaceholderLoaded = true;
                     }
                 }
 
@@ -307,7 +335,7 @@ namespace FFImageLoading.Work
                         await MainThreadDispatcher.PostAsync(() =>
                         {
                             Parameters?.OnError?.Invoke(ex);
-                        });
+                        }).ConfigureAwait(false);
                     }
                     else
                     {
@@ -353,26 +381,40 @@ namespace FFImageLoading.Work
 
             if (!await TryLoadFromMemoryCacheAsync(key, false, false, isLoadingPlaceholder).ConfigureAwait(false))
             {
-                var customResolver = isLoadingPlaceholder ? Parameters.CustomLoadingPlaceholderDataResolver : Parameters.CustomErrorPlaceholderDataResolver;
-                var loadResolver = customResolver ?? DataResolverFactory.GetResolver(path, source, Parameters, Configuration);
-                var loadImageData = await loadResolver.Resolve(path, Parameters, CancellationTokenSource.Token).ConfigureAwait(false);
-
-                using (loadImageData.Item1)
+                try
                 {
-                    ThrowIfCancellationRequested();
+                    var customResolver = isLoadingPlaceholder ? Parameters.CustomLoadingPlaceholderDataResolver : Parameters.CustomErrorPlaceholderDataResolver;
+                    var loadResolver = customResolver ?? DataResolverFactory.GetResolver(path, source, Parameters, Configuration);
+                    var loadImageData = await loadResolver.Resolve(path, Parameters, CancellationTokenSource.Token).ConfigureAwait(false);
 
-                    var loadImage = await GenerateImageAsync(path, source, loadImageData.Item1, loadImageData.Item3, TransformPlaceholders, true).ConfigureAwait(false);
+                    using (loadImageData.Item1)
+                    {
+                        ThrowIfCancellationRequested();
 
-                    if (loadImage != default(TImageContainer))
-                        MemoryCache.Add(key, loadImageData.Item3, loadImage);
+                        var loadImage = await GenerateImageAsync(path, source, loadImageData.Item1, loadImageData.Item3, TransformPlaceholders, true).ConfigureAwait(false);
 
-                    ThrowIfCancellationRequested();
+                        if (loadImage != default(TImageContainer))
+                            MemoryCache.Add(key, loadImageData.Item3, loadImage);
+
+                        ThrowIfCancellationRequested();
+
+                        if (isLoadingPlaceholder)
+                            PlaceholderWeakReference = new WeakReference<TImageContainer>(loadImage);
+
+                        await SetTargetAsync(loadImage, false).ConfigureAwait(false);
+                    }
 
                     if (isLoadingPlaceholder)
-                        PlaceholderWeakReference = new WeakReference<TImageContainer>(loadImage);
-                    
-                    await SetTargetAsync(loadImage, false).ConfigureAwait(false);
+                        _isLoadingPlaceholderLoaded = true;
                 }
+                catch (Exception ex)
+                {
+                    Logger.Error("Setting placeholder failed", ex);
+                }
+            }
+            else if (isLoadingPlaceholder)
+            {
+                _isLoadingPlaceholderLoaded = true;
             }
         }
 
@@ -399,6 +441,8 @@ namespace FFImageLoading.Work
                     using (imageData.Item1)
                     {
                         ImageInformation = imageData.Item3;
+                        ImageInformation.SetKey(Key, Parameters.CustomCacheKey);
+                        ImageInformation.SetPath(Parameters.Path);
                         ThrowIfCancellationRequested();
 
                         // Preload
@@ -460,7 +504,7 @@ namespace FFImageLoading.Work
                         await MainThreadDispatcher.PostAsync(() =>
                         {
                             Parameters?.OnError?.Invoke(ex);
-                        });
+                        }).ConfigureAwait(false);
                     }
                     else
                     {
@@ -498,7 +542,7 @@ namespace FFImageLoading.Work
                             if (success)
                                 Parameters?.OnSuccess?.Invoke(ImageInformation, loadingResult);
                             Parameters?.OnFinish?.Invoke(this);
-                        });
+                        }).ConfigureAwait(false);
                     }
                     else
                     {

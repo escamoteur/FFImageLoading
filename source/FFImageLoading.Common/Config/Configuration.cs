@@ -27,9 +27,10 @@ namespace FFImageLoading.Config
             VerboseMemoryCacheLogging = false;
             VerboseLoadingCancelledLogging = false;
             VerboseLogging = false;
-            SchedulerMaxParallelTasks = Math.Max(2, (int)(Environment.ProcessorCount / 2d));
+            SchedulerMaxParallelTasks = Math.Min(4, Math.Max(2, (int)(Environment.ProcessorCount / 2d)));
             DiskCacheDuration = TimeSpan.FromDays(30d);
             ExecuteCallbacksOnUIThread = false;
+            StreamChecksumsAsKeys = true;
 		}
 
 		/// <summary>
@@ -98,6 +99,13 @@ namespace FFImageLoading.Config
         /// <value><c>true</c> if bitmap memory optimizations; otherwise, <c>false</c>.</value>
         public bool BitmapOptimizations { get; set; }
 
+        /// <summary>
+        /// Gets or sets a value indicating whether this <see cref="T:FFImageLoading.Config.Configuration"/> stream
+        /// checksums as keys.
+        /// </summary>
+        /// <value><c>true</c> if stream checksums as keys; otherwise, <c>false</c>.</value>
+        public bool StreamChecksumsAsKeys { get; set; }
+
 		/// <summary>
 		/// Gets or sets a value indicating whether this <see cref="FFImageLoading.Config.Configuration"/> fade animation enabled.
 		/// </summary>
@@ -154,18 +162,21 @@ namespace FFImageLoading.Config
 
         /// <summary>
         /// Enables / disables verbose performance logging.
+        /// WARNING! It will downgrade image loading performance, disable it for release builds!
         /// </summary>
         /// <value>The verbose performance logging.</value>
         public bool VerbosePerformanceLogging { get; set; }
 
         /// <summary>
         /// Enables / disables verbose memory cache logging.
+        /// WARNING! It will downgrade image loading performance, disable it for release builds!
         /// </summary>
         /// <value>The verbose memory cache logging.</value>
         public bool VerboseMemoryCacheLogging { get; set; }
 
         /// <summary>
         /// Enables / disables verbose image loading cancelled logging.
+        /// WARNING! It will downgrade image loading performance, disable it for release builds!
         /// </summary>
         /// <value>The verbose image loading cancelled logging.</value>
         public bool VerboseLoadingCancelledLogging { get; set; }

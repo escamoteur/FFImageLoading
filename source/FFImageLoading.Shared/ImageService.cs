@@ -258,7 +258,7 @@ namespace FFImageLoading
         /// <param name="task">Image loading task to cancel.</param>
         public void CancelWorkFor(IImageLoaderTask task)
         {
-            Scheduler.Cancel(task);
+            task?.Cancel();
         }
 
         /// <summary>
@@ -278,9 +278,6 @@ namespace FFImageLoading
         {
 			if (task == null)
 				return;
-
-			if (task.Parameters.DelayInMs == null && Config.DelayInMs > 0)
-				task.Parameters.Delay(Config.DelayInMs);
 
 			Scheduler.LoadImage(task);
         }

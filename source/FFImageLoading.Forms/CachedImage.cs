@@ -11,6 +11,7 @@ namespace FFImageLoading.Forms
 	/// <summary>
 	/// CachedImage - Xamarin.Forms Image replacement with caching and downsampling capabilities
 	/// </summary>
+
 	public class CachedImage : View
 	{
 		public CachedImage()
@@ -93,7 +94,6 @@ namespace FFImageLoading.Forms
             {
                 BindableObject.SetInheritedBindingContext(newValue as BindableObject, bindable.BindingContext);
             }
-			((IVisualElementController)bindable).NativeSizeChanged();
         }
 			
 		/// <summary>
@@ -225,6 +225,8 @@ namespace FFImageLoading.Forms
 		/// DownsampleWidth and DownsampleHeight properties will be automatically set to view size
 		/// If the view height or width will not return > 0 - it'll fall back 
 		/// to using DownsampleWidth / DownsampleHeight properties values
+		/// IMPORTANT: That property is tricky when using some auto-layouts as view doesn't have its size defined,
+		/// so it's always safe to have DownsampleWidth / DownsampleHeight set as a fallback
 		/// </summary>
 		/// <value><c>true</c> if downsample to view size; otherwise, <c>false</c>.</value>
 		public bool DownsampleToViewSize
@@ -264,7 +266,7 @@ namespace FFImageLoading.Forms
 		/// <summary>
 		/// The cache duration property.
 		/// </summary>
-		public static readonly BindableProperty CacheDurationProperty = BindableProperty.Create(nameof(CacheDuration), typeof(TimeSpan), typeof(CachedImage), default(TimeSpan));
+		public static readonly BindableProperty CacheDurationProperty = BindableProperty.Create(nameof(CacheDuration), typeof(TimeSpan), typeof(CachedImage), ImageService.Instance.Config.DiskCacheDuration);
 
 		/// <summary>
 		/// How long the file will be cached on disk.
@@ -485,13 +487,9 @@ namespace FFImageLoading.Forms
 			base.OnBindingContextChanged();
 		}
 
-		[Obsolete("Use OnMeasure")]
-		protected override SizeRequest OnSizeRequest(double widthConstraint, double heightConstraint)
+		protected override SizeRequest OnMeasure(double widthConstraint, double heightConstraint)
 		{
-			SizeRequest desiredSize = base.OnSizeRequest(double.PositiveInfinity, double.PositiveInfinity);
-
-			double desiredAspect = desiredSize.Request.Width / desiredSize.Request.Height;
-			double constraintAspect = widthConstraint / heightConstraint;
+			SizeRequest desiredSize = base.OnMeasure(double.PositiveInfinity, double.PositiveInfinity);
 
 			double desiredWidth = desiredSize.Request.Width;
 			double desiredHeight = desiredSize.Request.Height;
@@ -499,48 +497,34 @@ namespace FFImageLoading.Forms
 			if (desiredWidth == 0 || desiredHeight == 0)
 				return new SizeRequest(new Size(0, 0));
 
-			double width = desiredWidth;
-			double height = desiredHeight;
-			if (constraintAspect > desiredAspect)
+
+			if (double.IsPositiveInfinity(widthConstraint) && double.IsPositiveInfinity(heightConstraint))
 			{
-				// constraint area is proportionally wider than image
-				switch (Aspect)
-				{
-					case Aspect.AspectFit:
-					case Aspect.AspectFill:
-						height = Math.Min(desiredHeight, heightConstraint);
-						width = desiredWidth * (height / desiredHeight);
-						break;
-					case Aspect.Fill:
-						width = Math.Min(desiredWidth, widthConstraint);
-						height = desiredHeight * (width / desiredWidth);
-						break;
-				}
-			}
-			else if (constraintAspect < desiredAspect)
-			{
-				// constraint area is proportionally taller than image
-				switch (Aspect)
-				{
-					case Aspect.AspectFit:
-					case Aspect.AspectFill:
-						width = Math.Min(desiredWidth, widthConstraint);
-						height = desiredHeight * (width / desiredWidth);
-						break;
-					case Aspect.Fill:
-						height = Math.Min(desiredHeight, heightConstraint);
-						width = desiredWidth * (height / desiredHeight);
-						break;
-				}
-			}
-			else
-			{
-				// constraint area is same aspect as image
-				width = Math.Min(desiredWidth, widthConstraint);
-				height = desiredHeight * (width / desiredWidth);
+				return new SizeRequest(new Size(desiredWidth, desiredHeight));
 			}
 
-			return new SizeRequest(new Size(width, height));
+			if (double.IsPositiveInfinity(widthConstraint))
+			{
+				double factor = heightConstraint / desiredHeight;
+				return new SizeRequest(new Size(desiredWidth * factor, desiredHeight * factor));
+			}
+
+			if (double.IsPositiveInfinity(heightConstraint))
+			{
+				double factor = widthConstraint / desiredWidth;
+				return new SizeRequest(new Size(desiredWidth * factor, desiredHeight * factor));
+			}
+
+			double fitsWidthRatio = widthConstraint / desiredWidth;
+			double fitsHeightRatio = heightConstraint / desiredHeight;
+			double ratioFactor = Math.Min(fitsWidthRatio, fitsHeightRatio);
+
+			return new SizeRequest(new Size(desiredWidth * ratioFactor, desiredHeight * ratioFactor));
+		}
+
+		public void SetIsLoading(bool isLoading)
+		{
+			SetValue(IsLoadingPropertyKey, isLoading);
 		}
 
 		internal Action InternalReloadImage;
@@ -616,12 +600,12 @@ namespace FFImageLoading.Forms
 			var fileImageSource = source as FileImageSource;
 
 			if (fileImageSource != null)
-				await ImageService.Instance.InvalidateCacheEntryAsync(fileImageSource.File, cacheType, removeSimilar);
+				await ImageService.Instance.InvalidateCacheEntryAsync(fileImageSource.File, cacheType, removeSimilar).ConfigureAwait(false);
 
 			var uriImageSource = source as UriImageSource;
 
 			if (uriImageSource != null)
-				await ImageService.Instance.InvalidateCacheEntryAsync(uriImageSource.Uri.OriginalString, cacheType, removeSimilar);
+				await ImageService.Instance.InvalidateCacheEntryAsync(uriImageSource.Uri.OriginalString, cacheType, removeSimilar).ConfigureAwait(false);
 		}
 
 		/// <summary>
@@ -764,7 +748,7 @@ namespace FFImageLoading.Forms
 		/// <summary>
 		/// Gets or sets the DownloadStartedCommand.
 		///  Occurs when an image starts downloading from web.
-		/// Command parameter: EventArgs
+		/// Command parameter: DownloadStartedEventArgs
 		/// </summary>
 		/// <value>The download started command.</value>
 		public ICommand DownloadStartedCommand
@@ -788,10 +772,84 @@ namespace FFImageLoading.Forms
 				downloadStartedCommand.Execute(e);
 		}
 
-        /// <summary>
-        /// The cache type property.
-        /// </summary>
-        public static readonly BindableProperty CacheTypeProperty = BindableProperty.Create(nameof(CacheType), typeof(CacheType?), typeof(CachedImage), default(CacheType?));
+		/// <summary>
+		/// This callback can be used for reading download progress
+		/// </summary>
+		public event EventHandler<CachedImageEvents.DownloadProgressEventArgs> DownloadProgress;
+
+		/// <summary>
+		/// The DownloadProgressCommandProperty.
+		/// </summary>
+		public static readonly BindableProperty DownloadProgressCommandProperty = BindableProperty.Create(nameof(DownloadProgressCommand), typeof(ICommand), typeof(CachedImage));
+
+		/// <summary>
+		/// Gets or sets the DownloadProgressCommand.
+		///  This callback can be used for reading download progress
+		/// Command parameter: DownloadProgressEventArgs
+		/// </summary>
+		/// <value>The download started command.</value>
+		public ICommand DownloadProgressCommand
+		{
+			get
+			{
+				return (ICommand)GetValue(DownloadProgressCommandProperty);
+			}
+			set
+			{
+				SetValue(DownloadProgressCommandProperty, value);
+			}
+		}
+
+		internal void OnDownloadProgress(CachedImageEvents.DownloadProgressEventArgs e)
+		{
+			DownloadProgress?.Invoke(this, e);
+
+			var downloadProgressCommand = DownloadProgressCommand;
+			if (downloadProgressCommand != null && downloadProgressCommand.CanExecute(e))
+				downloadProgressCommand.Execute(e);
+		}
+
+		/// <summary>
+		/// Called after file is succesfully written to the disk.
+		/// </summary>
+		public event EventHandler<CachedImageEvents.FileWriteFinishedEventArgs> FileWriteFinished;
+
+		/// <summary>
+		/// The FileWriteFinishedCommandProperty.
+		/// </summary>
+		public static readonly BindableProperty FileWriteFinishedCommandProperty = BindableProperty.Create(nameof(FileWriteFinishedCommand), typeof(ICommand), typeof(CachedImage));
+
+		/// <summary>
+		/// Gets or sets the FileWriteFinishedCommand.
+		///  Called after file is succesfully written to the disk.
+		/// Command parameter: FileWriteFinishedEventArgs
+		/// </summary>
+		/// <value>The download started command.</value>
+		public ICommand FileWriteFinishedCommand
+		{
+			get
+			{
+				return (ICommand)GetValue(FileWriteFinishedCommandProperty);
+			}
+			set
+			{
+				SetValue(FileWriteFinishedCommandProperty, value);
+			}
+		}
+
+		internal void OnFileWriteFinished(CachedImageEvents.FileWriteFinishedEventArgs e)
+		{
+			FileWriteFinished?.Invoke(this, e);
+
+			var fileWriteFinishedCommand = FileWriteFinishedCommand;
+			if (fileWriteFinishedCommand != null && fileWriteFinishedCommand.CanExecute(e))
+				fileWriteFinishedCommand.Execute(e);
+		}
+
+		/// <summary>
+		/// The cache type property.
+		/// </summary>
+		public static readonly BindableProperty CacheTypeProperty = BindableProperty.Create(nameof(CacheType), typeof(CacheType?), typeof(CachedImage), default(CacheType?));
 
         /// <summary>
         /// Set the cache storage type, (Memory, Disk, All). by default cache is set to All.

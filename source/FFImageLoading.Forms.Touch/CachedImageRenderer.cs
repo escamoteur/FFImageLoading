@@ -122,7 +122,7 @@ namespace FFImageLoading.Forms.Touch
 				Control.Image = null;
 			}
 
-			((IElementController)Element).SetValueFromRenderer(CachedImage.IsLoadingPropertyKey, true);
+			Element.SetIsLoading(true);
 
 			Cancel();
 			TaskParameter imageLoader = null;
@@ -295,6 +295,12 @@ namespace FFImageLoading.Forms.Touch
 
 				imageLoader.DownloadStarted((downloadInformation) =>
 					element.OnDownloadStarted(new CachedImageEvents.DownloadStartedEventArgs(downloadInformation)));
+
+				imageLoader.DownloadProgress((progress) =>
+					element.OnDownloadProgress(new CachedImageEvents.DownloadProgressEventArgs(progress)));
+
+				imageLoader.FileWriteFinished((fileWriteInfo) =>
+					element.OnFileWriteFinished(new CachedImageEvents.FileWriteFinishedEventArgs(fileWriteInfo)));
 				
 				_currentTask = imageLoader.Into(Control);	
 			}
@@ -306,8 +312,8 @@ namespace FFImageLoading.Forms.Touch
 			{
 				if (element != null && !_isDisposed)
 				{
-					((IElementController)element).SetValueFromRenderer(CachedImage.IsLoadingPropertyKey, false);
 					((IVisualElementController)element).NativeSizeChanged();
+					element.SetIsLoading(false);
 				}
 			});
 		}
@@ -319,9 +325,10 @@ namespace FFImageLoading.Forms.Touch
 
 		private void Cancel()
 		{
-			if (_currentTask != null && !_currentTask.IsCancelled) 
+			var taskToCancel = _currentTask;
+			if (taskToCancel != null && !taskToCancel.IsCancelled)
 			{
-				_currentTask.Cancel ();
+				taskToCancel.Cancel();
 			}
 		}
 			
@@ -342,7 +349,7 @@ namespace FFImageLoading.Forms.Touch
 			await MainThreadDispatcher.Instance.PostAsync(() => {
 				if (Control != null)
 					image = Control.Image;
-			});
+			}).ConfigureAwait(false);
 
 			if (image == null)
 				return null;

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Windows.Storage;
 
@@ -6,13 +7,13 @@ namespace FFImageLoading
 {
     public class FFImageSourceBinding
     {
-        public FFImageSourceBinding(FFImageLoading.Work.ImageSource imageSource, string path)
+        public FFImageSourceBinding(Work.ImageSource imageSource, string path)
         {
             ImageSource = imageSource;
             Path = path;
         }
 
-        public FFImageLoading.Work.ImageSource ImageSource { get; private set; }
+        public Work.ImageSource ImageSource { get; private set; }
 
         public string Path { get; private set; }
 
@@ -26,30 +27,16 @@ namespace FFImageLoading
             Uri uri;
             if (!Uri.TryCreate(source, UriKind.Absolute, out uri) || uri.Scheme == "file")
             {
-                StorageFile file = null;
-
-                try
+                var isFile = await Cache.FFSourceBindingCache.IsFileAsync(source);
+                if (isFile)
                 {
-                    var filePath = System.IO.Path.GetDirectoryName(source);
-
-                    if (!string.IsNullOrWhiteSpace(filePath) && !(filePath.TrimStart('\\', '/')).StartsWith("Assets"))
-                    {
-                        file = await StorageFile.GetFileFromPathAsync(source);
-                    }
-                }
-                catch (Exception)
-                {
+                    return new FFImageSourceBinding(Work.ImageSource.Filepath, source);
                 }
 
-                if (file != null)
-                {
-                    return new FFImageSourceBinding(FFImageLoading.Work.ImageSource.Filepath, source);
-                }
-
-                return new FFImageSourceBinding(FFImageLoading.Work.ImageSource.CompiledResource, source);
+                return new FFImageSourceBinding(Work.ImageSource.CompiledResource, source);
             }
 
-            return new FFImageSourceBinding(FFImageLoading.Work.ImageSource.Url, source);
+            return new FFImageSourceBinding(Work.ImageSource.Url, source);
         }
 
         public override bool Equals(object obj)
